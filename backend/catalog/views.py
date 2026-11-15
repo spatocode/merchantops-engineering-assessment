@@ -51,7 +51,7 @@ class ProductListView(generics.ListAPIView):
             pk=merchant_id,
         )
 
-        queryset = Product.objects.filter(merchant_id=merchant_id).order_by("id")
+        queryset = Product.objects.select_related("category").filter(merchant_id=merchant_id).order_by("id")
 
         search = self.request.query_params.get("search", "").strip()
 
@@ -94,33 +94,28 @@ class ProductEditorView(APIView):
         variants = list(
             ProductVariant.objects.filter(product_id=product.pk).order_by("id")
         )
+        variant_ids = [variant.pk for variant in variants]
 
-        prices_by_variant = {}
-        inventory_by_variant = {}
-
-        for variant in variants:
-            prices_by_variant[variant.pk] = [
+        prices_by_variant = {variant_id: [] for variant_id in variant_ids}
+        for price in PriceRule.objects.filter(variant_id__in=variant_ids).order_by(
+            "id"
+        ):
+            prices_by_variant[price.variant_id].append(
                 {
                     "id": price.pk,
                     "tier": price.tier,
                     "amount": f"{price.amount:.2f}",
                 }
-                for price in PriceRule.objects.filter(variant_id=variant.pk).order_by(
-                    "id"
-                )
-            ]
-
-            inventory = Inventory.objects.filter(variant_id=variant.pk).first()
-
-            inventory_by_variant[variant.pk] = (
-                {
-                    "id": inventory.pk,
-                    "quantity": inventory.quantity,
-                    "reserved": inventory.reserved,
-                }
-                if inventory
-                else None
             )
+
+        inventory_by_variant = {
+            inventory.variant_id: {
+                "id": inventory.pk,
+                "quantity": inventory.quantity,
+                "reserved": inventory.reserved,
+            }
+            for inventory in Inventory.objects.filter(variant_id__in=variant_ids)
+        }
 
         availability = list(
             Availability.objects.filter(product_id=product.pk)

@@ -24,24 +24,9 @@ function fetchPage() {
       signal,
     )
 
-    // Load each product's detail before displaying the catalogue.
-    // The catalogue is rendered only after all records are hydrated.
-    const hydrated = []
-
-    for (const item of catalogue.results) {
-      const detail = await products.detail(item.id, signal)
-      hydrated.push({
-        ...item,
-        name: detail.name,
-        sku: detail.sku,
-        status: detail.status,
-        image_url: detail.image_url,
-      })
-    }
-
     return {
       ...catalogue,
-      results: hydrated,
+      results: catalogue.results,
     }
   })
 }
