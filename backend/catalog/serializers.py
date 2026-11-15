@@ -5,6 +5,23 @@ from rest_framework import serializers
 from catalog.models import AuditLog, Category, Product
 
 
+class InventoryAdjustSerializer(serializers.Serializer):
+    delta = serializers.IntegerField()
+    reason = serializers.CharField(max_length=255, trim_whitespace=True)
+
+    def validate_delta(self, value):
+        if value == 0:
+            raise serializers.ValidationError(
+                "Delta must be a nonzero whole number."
+            )
+        return value
+
+    def validate_reason(self, value):
+        if not value:
+            raise serializers.ValidationError("This field may not be blank.")
+        return value
+
+
 class ProductListSerializer(serializers.ModelSerializer):
     category = serializers.CharField(
         source="category.name",

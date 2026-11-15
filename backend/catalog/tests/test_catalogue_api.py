@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from catalog.models import Category, Merchant, Product
@@ -167,3 +169,40 @@ class ProductListAPITests(TestCase):
 
         self.assertEqual(second.status_code, 200)
         self.assertEqual(len(second.data["results"]), 6)
+
+    def test_list_query_count_does_not_grow_with_page_size(self):
+        """Category names must come from select_related, not per-row lookups."""
+        with CaptureQueriesContext(connection) as baseline:
+            first = self.client.get(
+                self.url,
+                {"merchant_id": self.merchant.pk},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(len(first.data["results"]), 1)
+
+        category = self.product.category
+        Product.objects.bulk_create(
+            [
+                Product(
+                    merchant=self.merchant,
+                    category=category,
+                    name=f"Query Product {number}",
+                    sku=f"QRY-{number:03d}",
+                )
+                for number in range(24)
+            ]
+        )
+
+        with CaptureQueriesContext(connection) as fuller:
+            response = self.client.get(
+                self.url,
+                {"merchant_id": self.merchant.pk},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["results"]), 25)
+        self.assertEqual(len(fuller), len(baseline))
+        self.assertTrue(
+            all(item["category"] == "Electronics" for item in response.data["results"])
+        )

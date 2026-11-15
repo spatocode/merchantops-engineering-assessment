@@ -24,24 +24,36 @@ export async function signOut() {
   if (!response.ok) throw new Error('Could not sign out. Refresh the page and try again.')
 }
 
+const fieldLabels = {
+  delta: 'Adjustment',
+  reason: 'Reason',
+  non_field_errors: null,
+  detail: null,
+}
+
 function errorMessage(data, fallback) {
   if (typeof data?.detail === 'string') return data.detail
+  if (Array.isArray(data?.detail)) return data.detail.join(' ')
   if (!data || typeof data !== 'object') return fallback
   return Object.entries(data).map(([field, messages]) => {
     const message = Array.isArray(messages) ? messages.join(' ') : String(messages)
-    return field === 'non_field_errors' ? message : field.replaceAll('_', ' ') + ' — ' + message
+    const label = Object.hasOwn(fieldLabels, field)
+      ? fieldLabels[field]
+      : field.replaceAll('_', ' ')
+    return label ? label + ' — ' + message : message
   }).join(' ') || fallback
 }
 
-async function request(path, { params, signal, body } = {}) {
+async function request(path, { params, signal, body, method } = {}) {
   const query = new URLSearchParams({ merchant_id: merchant.id, ...params })
   const headers = { Accept: 'application/json' }
+  const httpMethod = method || (body ? 'PATCH' : 'GET')
   if (body) {
     headers['Content-Type'] = 'application/json'
     headers['X-CSRFToken'] = csrfToken()
   }
   const response = await fetch('/api/products/' + path + '?' + query, {
-    method: body ? 'PATCH' : 'GET',
+    method: httpMethod,
     credentials: 'same-origin',
     signal,
     headers,
@@ -73,6 +85,12 @@ export const products = {
   },
   update(id, body) {
     return request(id + '/', { body })
+  },
+  adjustInventory(productId, variantId, body) {
+    return request(productId + '/variants/' + variantId + '/inventory/adjust/', {
+      body,
+      method: 'POST',
+    })
   },
   activity(id, page, signal) {
     return request(id + '/activity/', { params: { page }, signal })

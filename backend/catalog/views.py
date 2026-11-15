@@ -17,10 +17,12 @@ from catalog.models import (
     ProductVariant,
 )
 from catalog.serializers import (
+    InventoryAdjustSerializer,
     ProductActivitySerializer,
     ProductListSerializer,
     ProductUpdateSerializer,
 )
+from catalog.services.inventory import adjust_variant_inventory
 
 
 class ProductPagination(PageNumberPagination):
@@ -263,3 +265,40 @@ class ProductActivityView(generics.ListAPIView):
             .select_related("actor")
             .order_by("-created_at", "-id")
         )
+
+
+class InventoryAdjustView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, product_id, variant_id):
+        merchant_id = request.query_params.get("merchant_id")
+
+        if not merchant_id:
+            raise ValidationError({"merchant_id": "This parameter is required."})
+
+        try:
+            merchant_id = int(merchant_id)
+        except (TypeError, ValueError):
+            raise ValidationError({"merchant_id": "Must be a valid integer."})
+
+        if merchant_id <= 0:
+            raise ValidationError({"merchant_id": "Must be a positive integer."})
+
+        get_object_or_404(
+            Merchant.objects.filter(members=request.user),
+            pk=merchant_id,
+        )
+
+        serializer = InventoryAdjustSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        result = adjust_variant_inventory(
+            merchant_id=merchant_id,
+            product_id=product_id,
+            variant_id=variant_id,
+            delta=serializer.validated_data["delta"],
+            reason=serializer.validated_data["reason"],
+            actor=request.user,
+        )
+
+        return Response(result)

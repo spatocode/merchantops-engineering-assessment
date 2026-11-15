@@ -1,7 +1,9 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from catalog.models import (
@@ -150,3 +152,59 @@ class ProductEditorAPITests(TestCase):
             self.editor_url(self.product),
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_editor_query_count_does_not_grow_with_variants(self):
+        """Prices and inventory must be bulk-loaded, not queried per variant."""
+        with CaptureQueriesContext(connection) as baseline:
+            first = self.client.get(
+                self.editor_url(self.product),
+                {"merchant_id": self.merchant.pk},
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(len(first.data["variants"]), 1)
+
+        variants = [
+            ProductVariant(
+                product=self.product,
+                name=f"Variant {number}",
+                sku=f"WORK-001-V{number}",
+            )
+            for number in range(2, 12)
+        ]
+        ProductVariant.objects.bulk_create(variants)
+        created = list(
+            ProductVariant.objects.filter(product=self.product).exclude(
+                sku="WORK-001-16"
+            )
+        )
+
+        PriceRule.objects.bulk_create(
+            [
+                PriceRule(
+                    variant=variant,
+                    tier="retail",
+                    amount=Decimal("99.00"),
+                )
+                for variant in created
+            ]
+        )
+        Inventory.objects.bulk_create(
+            [
+                Inventory(variant=variant, quantity=10, reserved=1)
+                for variant in created
+            ]
+        )
+
+        with CaptureQueriesContext(connection) as fuller:
+            response = self.client.get(
+                self.editor_url(self.product),
+                {"merchant_id": self.merchant.pk},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["variants"]), 11)
+        self.assertEqual(len(fuller), len(baseline))
+        self.assertTrue(
+            all(variant["inventory"] is not None for variant in response.data["variants"])
+        )

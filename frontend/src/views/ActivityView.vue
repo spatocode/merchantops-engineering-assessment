@@ -15,6 +15,10 @@ const { data: product, load: loadProduct } = useResource()
 const { data, loading, error, load } = useResource()
 const timestamp = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 const fieldNames = { sku: 'SKU', name: 'Product name', category_id: 'Category ID', image_url: 'Image path' }
+const actionLabels = {
+  'product.updated': 'Product updated',
+  'inventory.adjusted': 'Inventory adjusted',
+}
 
 function fetchActivity() {
   load((signal) => products.activity(id, page.value, signal))
@@ -28,6 +32,14 @@ function valueText(value) {
   if (value === '' || value == null) return 'Empty'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function actionLabel(action) {
+  return actionLabels[action] || action
+}
+
+function signedDelta(delta) {
+  return delta > 0 ? `+${delta}` : String(delta)
 }
 
 loadProduct((signal) => products.detail(id, signal))
@@ -58,11 +70,30 @@ watch(page, fetchActivity, { immediate: true })
           </thead>
           <tbody>
             <tr v-for="record in data.results" :key="record.id">
-              <th scope="row">{{ record.action === 'product.updated' ? 'Product updated' : record.action }}</th>
+              <th scope="row">{{ actionLabel(record.action) }}</th>
               <td>{{ record.actor || 'Unknown' }}</td>
               <td><time :datetime="record.created_at">{{ timestamp.format(new Date(record.created_at)) }}</time></td>
               <td>
-                <dl v-if="record.details?.changes && Object.keys(record.details.changes).length" class="change-list">
+                <dl v-if="record.action === 'inventory.adjusted' && record.details" class="change-list">
+                  <div>
+                    <dt>Variant</dt>
+                    <dd><span class="code">{{ record.details.variant_sku }}</span></dd>
+                  </div>
+                  <div>
+                    <dt>Quantity</dt>
+                    <dd>
+                      <span class="change-before"><span class="sr-only">From </span>{{ record.details.quantity_before }}</span>
+                      <span aria-hidden="true"> → </span>
+                      <span class="change-after"><span class="sr-only">to </span>{{ record.details.quantity_after }}</span>
+                      <span> ({{ signedDelta(record.details.delta) }})</span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Reason</dt>
+                    <dd>{{ record.details.reason }}</dd>
+                  </div>
+                </dl>
+                <dl v-else-if="record.details?.changes && Object.keys(record.details.changes).length" class="change-list">
                   <div v-for="(change, field) in record.details.changes" :key="field">
                     <dt class="title-case">{{ fieldNames[field] || field.replaceAll('_', ' ') }}</dt>
                     <dd>

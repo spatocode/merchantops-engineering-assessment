@@ -23,6 +23,10 @@ const dirty = computed(() => changed.value.length > 0)
 const saving = ref(false)
 const saveError = ref('')
 const saved = ref(false)
+const adjustDrafts = ref({})
+const adjustingId = ref(null)
+const adjustError = ref('')
+const adjustSuccess = ref('')
 const formatPrice = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const tiers = computed(() => [...new Set([
   'retail',
@@ -47,7 +51,13 @@ function resetForm(source) {
 }
 
 watch(product, (record) => {
-  if (record) resetForm(record)
+  if (!record) return
+  resetForm(record)
+  const drafts = { ...adjustDrafts.value }
+  for (const variant of record.variants) {
+    if (!drafts[variant.id]) drafts[variant.id] = { delta: '', reason: '' }
+  }
+  adjustDrafts.value = drafts
 })
 
 function confirmLeave() {
@@ -127,6 +137,56 @@ async function save() {
     saveError.value = failure.message
   } finally {
     saving.value = false
+  }
+}
+
+function clearAdjustFeedback() {
+  adjustError.value = ''
+  adjustSuccess.value = ''
+}
+
+async function submitAdjustment(variant) {
+  if (!variant.inventory || adjustingId.value) return
+
+  const draftValues = adjustDrafts.value[variant.id] || { delta: '', reason: '' }
+  const delta = Number(draftValues.delta)
+  const reason = draftValues.reason.trim()
+
+  clearAdjustFeedback()
+
+  if (!Number.isInteger(delta) || delta === 0) {
+    adjustError.value = 'Enter a nonzero whole-number adjustment.'
+    return
+  }
+  if (!reason) {
+    adjustError.value = 'A reason is required for inventory adjustments.'
+    return
+  }
+
+  adjustingId.value = variant.id
+  try {
+    const result = await products.adjustInventory(id, variant.id, { delta, reason })
+    product.value = {
+      ...product.value,
+      variants: product.value.variants.map((item) => (
+        item.id === variant.id
+          ? {
+              ...item,
+              inventory: {
+                ...item.inventory,
+                quantity: result.quantity,
+                reserved: result.reserved,
+              },
+            }
+          : item
+      )),
+    }
+    adjustDrafts.value[variant.id] = { delta: '', reason: '' }
+    adjustSuccess.value = `${variant.sku}: quantity ${result.quantity_before} → ${result.quantity_after}.`
+  } catch (failure) {
+    adjustError.value = failure.message
+  } finally {
+    adjustingId.value = null
   }
 }
 </script>
@@ -231,10 +291,26 @@ async function save() {
 
     <section v-show="tab === 'inventory'" id="panel-inventory" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-inventory" tabindex="0">
       <h2 class="panel-heading">Variant inventory</h2>
+      <div
+        v-if="adjustError || adjustSuccess"
+        class="feedback-banner"
+        :class="adjustError ? 'feedback-banner-error' : 'feedback-banner-success'"
+        :role="adjustError ? 'alert' : 'status'"
+      >
+        <strong>{{ adjustError ? 'Adjustment failed' : 'Adjustment saved' }}</strong>
+        <p>{{ adjustError || adjustSuccess }}</p>
+      </div>
       <div v-if="product.variants.length" class="table-scroll">
-        <table class="data-table">
+        <table class="data-table inventory-table">
           <thead>
-            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th></tr>
+            <tr>
+              <th scope="col">Variant</th>
+              <th scope="col">SKU</th>
+              <th scope="col" class="numeric">Quantity</th>
+              <th scope="col" class="numeric">Reserved</th>
+              <th scope="col" class="numeric">Available</th>
+              <th scope="col">Adjust stock</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="variant in product.variants" :key="variant.id">
@@ -243,6 +319,43 @@ async function save() {
               <td class="numeric">{{ variant.inventory?.quantity ?? '—' }}</td>
               <td class="numeric">{{ variant.inventory?.reserved ?? '—' }}</td>
               <td class="numeric">{{ variant.inventory ? variant.inventory.quantity - variant.inventory.reserved : '—' }}</td>
+              <td>
+                <form
+                  v-if="variant.inventory && adjustDrafts[variant.id]"
+                  class="inventory-adjust"
+                  @submit.prevent="submitAdjustment(variant)"
+                  @input="clearAdjustFeedback"
+                >
+                  <label class="sr-only" :for="'delta-' + variant.id">Adjustment amount for {{ variant.sku }}</label>
+                  <input
+                    :id="'delta-' + variant.id"
+                    v-model="adjustDrafts[variant.id].delta"
+                    type="number"
+                    step="1"
+                    required
+                    :disabled="adjustingId === variant.id"
+                    placeholder="± qty"
+                  />
+                  <label class="sr-only" :for="'reason-' + variant.id">Reason for {{ variant.sku }}</label>
+                  <input
+                    :id="'reason-' + variant.id"
+                    v-model="adjustDrafts[variant.id].reason"
+                    type="text"
+                    maxlength="255"
+                    required
+                    :disabled="adjustingId === variant.id"
+                    placeholder="Reason"
+                  />
+                  <button
+                    class="button button-primary"
+                    type="submit"
+                    :disabled="adjustingId !== null"
+                  >
+                    {{ adjustingId === variant.id ? 'Saving…' : 'Apply' }}
+                  </button>
+                </form>
+                <span v-else class="muted">No inventory record</span>
+              </td>
             </tr>
           </tbody>
         </table>
